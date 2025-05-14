@@ -15,6 +15,7 @@ type Transform struct {
 	UserID    int       `json:"user_id"`
 	Url       string    `json:"url"`
 	Result    string    `json:"result"`
+	Tittle    string    `json:"tittle"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

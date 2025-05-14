@@ -18,7 +18,6 @@ import (
 	"feishu2md/server/pkg/metrics"
 	"feishu2md/server/pkg/utils"
 	"fmt"
-	"github.com/Wsine/feishu2md/core"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 	"io"
@@ -32,7 +31,7 @@ import (
 	"time"
 )
 
-func RegisterRoutes(router *gin.Engine) {
+func RegisterRoutes(router *gin.Engine, storage *storage.LocalStorage) {
 	router.GET("/health", healthCheck)
 	router.POST("/v1/upload", uploadFile)                  // 新增上传接口
 	router.POST("/v1/transform", transformV1)              // 文件解析接口
@@ -42,6 +41,16 @@ func RegisterRoutes(router *gin.Engine) {
 	router.POST("/api/register", register)
 	router.POST("/api/login", login)
 	router.GET("/v1/getHistory", getHistory)
+	router.GET("/storage/*filename", func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "*")                                    // 允许所有来源
+		c.Header("Access-Control-Allow-Methods", "GET, OPTIONS")                        // 允许的方法
+		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Authorization") // 允许的请求头
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+		http.ServeFile(c.Writer, c.Request, filepath.Join(storage.BaseDir, c.Param("filename")))
+	})
 }
 
 func getHistory(c *gin.Context) {
@@ -262,14 +271,20 @@ func transformV1(c *gin.Context) {
 	}
 
 	// 选择处理流程
-	var handler func(*gin.Context, *model.Req) (string, string, error)
+	var handler func(*gin.Context, *model.Req) (string, string, []string, error)
 	if req.IsFile {
 		//处理pdf、docx转置的飞书文档
 		handler = handleFileTransform
 	} else {
 		handler = handleDocTransform
 	}
-	markdown, tittle, err := handler(c, &req)
+	//1. 没有markdown处理
+	markdown, tittle, imgTokens, err := handler(c, &req)
+	fmt.Println("")
+	fmt.Printf("markdown:%v", markdown)
+	if tittle == "" {
+		tittle = "default"
+	}
 	// 执行处理逻辑
 	if err != nil {
 		log.Error("Processing failed", zap.Error(err))
@@ -299,9 +314,8 @@ func transformV1(c *gin.Context) {
 		}
 		client := feishu.NewClient(cfg.Feishu.AppID, cfg.Feishu.AppSecret, domain)
 		processor := img.NewProcessor(*redis, storageClient, *client, *cfg.ImgConfig)
-		newConfig := core.NewConfig(cfg.Feishu.AppID, cfg.Feishu.AppSecret)
-		parser := core.NewParser(newConfig.Output)
-		imgTokens := parser.ImgTokens
+		imgTokens := imgTokens
+		fmt.Printf("ImgToken:%v", imgTokens)
 		// 图片处理方法
 		resultMarkdown, err := processor.ProcessImages(c.Request.Context(), markdown, imgTokens, req)
 		if err != nil {
@@ -309,26 +323,32 @@ func transformV1(c *gin.Context) {
 			model.Error(c, 1003, "图片处理失败")
 			return
 		}
-		histtroyService.CreateTransform(userID, req.Url, resultMarkdown)
+		histtroyService.CreateTransform(userID, req.Url, resultMarkdown, tittle)
 		// 返回处理后的结果
 		model.Success(c, gin.H{
-			"markdown":   resultMarkdown,
-			"sheetTitle": tittle,
+			"markdown": resultMarkdown,
+			"Title":    tittle,
 		})
 
 	} else {
-		histtroyService.CreateTransform(userID, req.Url, markdown)
+		histtroyService.CreateTransform(userID, req.Url, markdown, tittle)
 		model.Success(c, gin.H{
-			"markdown":   markdown,
-			"sheetTitle": tittle,
+			"markdown": markdown,
+			"Title":    tittle,
 		}) // 返回未处理图片的 markdown
+	}
+	//写入文件
+	err = writeContentToMDFile(markdown)
+	fmt.Printf("resultMarkdown:%v", markdown)
+	if err != nil {
+		logger.L.Info("failed to write .md file: %v", zap.Error(err))
 	}
 	// 记录QPS
 	metrics.QPS.WithLabelValues(c.Request.Method, c.FullPath()).Inc()
 	return
 }
 
-func handleDocTransform(c *gin.Context, req *model.Req) (string, string, error) {
+func handleDocTransform(c *gin.Context, req *model.Req) (string, string, []string, error) {
 	start := time.Now()
 
 	// 记录指标
@@ -340,20 +360,20 @@ func handleDocTransform(c *gin.Context, req *model.Req) (string, string, error) 
 	}()
 
 	// 处理文档转换
-	markdown, tittle, err := handleURLArgument(c, req)
+	markdown, tittle, imgTokens, err := handleURLArgument(c, req)
 	if err != nil {
 		// 特定错误处理
 		if strings.Contains(err.Error(), "Invalid access token") ||
 			strings.Contains(err.Error(), "Invalid URL format") {
 			metrics.ErrorRequests.WithLabelValues(c.Request.Method, c.FullPath()).Inc()
-			return "", "", &model.ErrorResponse{
+			return "", "", nil, &model.ErrorResponse{
 				Code:    http.StatusBadRequest,
 				Message: "Unsupported document type",
 			}
 		}
 
 		metrics.ErrorRequests.WithLabelValues(c.Request.Method, c.FullPath()).Inc()
-		return "", "", &model.ErrorResponse{
+		return "", "", nil, &model.ErrorResponse{
 			Code:    http.StatusInternalServerError,
 			Message: "Document transformation failed",
 			Detail:  err.Error(),
@@ -366,12 +386,12 @@ func handleDocTransform(c *gin.Context, req *model.Req) (string, string, error) 
 		c.FullPath(),
 		http.StatusText(http.StatusOK),
 	).Inc()
-	return markdown, tittle, nil
+	return markdown, tittle, imgTokens, nil
 }
 
 // DocHandler 文档处理接口
 type DocHandler interface {
-	Process(ctx context.Context, token, domain, userAccessToken string, downLoadImg bool, req model.Req) ([]byte, error)
+	Process(ctx context.Context, token, domain, userAccessToken string, downLoadImg bool, req model.Req) ([]byte, []string, error)
 }
 
 // 文档处理器注册表
@@ -386,7 +406,7 @@ var docHandlers = map[string]DocHandler{
 	"bitable": &BitableHandler{},
 }
 
-func handleURLArgument(c *gin.Context, req *model.Req) (string, string, error) {
+func handleURLArgument(c *gin.Context, req *model.Req) (string, string, []string, error) {
 	start := time.Now()
 	log := logger.WithRequest(c.Request)
 	ctx := c.Request.Context()
@@ -401,7 +421,7 @@ func handleURLArgument(c *gin.Context, req *model.Req) (string, string, error) {
 	// 1. 解析URL获取文档类型和token
 	domain, docType, token, err := parseDocumentURL(req.Url)
 	if err != nil {
-		return "", "", &model.ErrorResponse{
+		return "", "", nil, &model.ErrorResponse{
 			Code:    http.StatusBadRequest,
 			Message: "Invalid document URL",
 			Detail:  err.Error(),
@@ -411,7 +431,7 @@ func handleURLArgument(c *gin.Context, req *model.Req) (string, string, error) {
 	// 2. 获取文档处理器
 	handler, ok := docHandlers[docType]
 	if !ok {
-		return "", "", &model.ErrorResponse{
+		return "", "", nil, &model.ErrorResponse{
 			Code:    http.StatusUnprocessableEntity,
 			Message: "Unsupported document type",
 			Detail:  fmt.Sprintf("Doctype '%s' not supported", docType),
@@ -419,19 +439,19 @@ func handleURLArgument(c *gin.Context, req *model.Req) (string, string, error) {
 	}
 
 	// 3. 处理文档内容
-	content, err := handler.Process(ctx, token, domain, req.UserAccessToken, req.WithImageDownload, *req)
+	content, imgTokens, err := handler.Process(ctx, token, domain, req.UserAccessToken, req.WithImageDownload, *req)
 	if err != nil {
-		return "", "", wrapProcessingError(err, docType)
+		return "", "", nil, wrapProcessingError(err, docType)
 	}
 	var result struct {
 		Markdown   string `json:"markdown"`
 		SheetTitle string `json:"sheetTitle"`
 	}
 	if err := json.Unmarshal(content, &result); err != nil {
-		return "", "", fmt.Errorf("failed to parse sheet response: %w", err)
+		return "", "", nil, fmt.Errorf("failed to parse sheet response: %w", err)
 	}
-
-	return result.Markdown, result.SheetTitle, nil
+	fmt.Printf("handleURLArgument:content:%v", result.Markdown)
+	return result.Markdown, result.SheetTitle, imgTokens, nil
 }
 
 // parseDocumentURL 解析飞书文档URL
@@ -489,22 +509,32 @@ func wrapProcessingError(err error, docType string) error {
 // DocHandlerImpl 旧文档处理器
 type DocHandlerImpl struct{}
 
-func (h *DocHandlerImpl) Process(ctx context.Context, token, domain, userAccessToken string, downLoadImg bool, req model.Req) ([]byte, error) {
+func (h *DocHandlerImpl) Process(ctx context.Context, token, domain, userAccessToken string, downLoadImg bool, req model.Req) ([]byte, []string, error) {
 	cfg := config.LoadConfig()
 	client := feishu.NewClient(cfg.Feishu.AppID, cfg.Feishu.AppSecret, domain)
 
-	content, err := client.GetDocumentContent(ctx, token, userAccessToken)
+	result, err := client.GetDocumentContent(ctx, token, userAccessToken)
+	resp := map[string]string{
+		"markdown": result.Markdown,
+		"docTitle": result.DocTitle,
+	}
+	//err = writeContentToMDFile(result.Markdown)
+	//if err != nil {
+	//	log.Printf("failed to write .md file: %v", err)
+	//	// 非致命错误，继续执行
+	//}
+	jsonBytes, err := json.Marshal(resp)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get document content: %w", err)
+		return nil, nil, fmt.Errorf("failed to marshal doc result: %w", err)
 	}
 
-	return []byte(content), nil
+	return jsonBytes, result.ImgTokens, nil
 }
 
 // WikiHandler 处理知识库文档
 type WikiHandler struct{}
 
-func (h *WikiHandler) Process(ctx context.Context, token, domain, userAccessToken string, downLoadImg bool, req model.Req) ([]byte, error) {
+func (h *WikiHandler) Process(ctx context.Context, token, domain, userAccessToken string, downLoadImg bool, req model.Req) ([]byte, []string, error) {
 	cfg := config.LoadConfig()
 	client := feishu.NewClient(cfg.Feishu.AppID, cfg.Feishu.AppSecret, domain)
 
@@ -512,12 +542,12 @@ func (h *WikiHandler) Process(ctx context.Context, token, domain, userAccessToke
 	node, err := client.GetWikiNodeInfo(ctx, token, userAccessToken)
 	fmt.Printf("node:%v", node.ObjType)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	fmt.Printf("Type:%v", node.ObjType)
 	handler, exists := docHandlers[node.ObjType]
 	if !exists {
-		return nil, fmt.Errorf("暂不支持处理 %s 类型文档", node.ObjType)
+		return nil, nil, fmt.Errorf("暂不支持处理 %s 类型文档", node.ObjType)
 	}
 
 	// 转发到实际文档处理器
@@ -527,13 +557,13 @@ func (h *WikiHandler) Process(ctx context.Context, token, domain, userAccessToke
 // SheetHandler 表格处理器
 type SheetHandler struct{}
 
-func (s *SheetHandler) Process(ctx context.Context, token, domain, userAccessToken string, downLoadImg bool, req model.Req) ([]byte, error) {
+func (s *SheetHandler) Process(ctx context.Context, token, domain, userAccessToken string, downLoadImg bool, req model.Req) ([]byte, []string, error) {
 	cfg := config.LoadConfig()
 	client := feishu.NewClient(cfg.Feishu.AppID, cfg.Feishu.AppSecret, domain)
 	fmt.Printf("token:%s,userAccessToken:%s,Url:%s", token, userAccessToken, req.Url)
 	result, err := client.GetSheetsContent(ctx, token, userAccessToken, req.Url)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get document content: %w", err)
+		return nil, nil, fmt.Errorf("failed to get document content: %w", err)
 	}
 	fmt.Printf("result:%v", result)
 
@@ -549,10 +579,10 @@ func (s *SheetHandler) Process(ctx context.Context, token, domain, userAccessTok
 	}
 	jsonBytes, err := json.Marshal(resp)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal sheet result: %w", err)
+		return nil, nil, fmt.Errorf("failed to marshal sheet result: %w", err)
 	}
 
-	return jsonBytes, nil
+	return jsonBytes, result.ImgTokens, nil
 }
 
 func writeContentToMDFile(content string) error {
@@ -614,16 +644,16 @@ func sanitizeFileName(fileName string) string {
 type BitableHandler struct {
 }
 
-func (s *BitableHandler) Process(ctx context.Context, token, domain, userAccessToken string, downLoadImg bool, req model.Req) ([]byte, error) {
+func (s *BitableHandler) Process(ctx context.Context, token, domain, userAccessToken string, downLoadImg bool, req model.Req) ([]byte, []string, error) {
 	cfg := config.LoadConfig()
 	client := feishu.NewClient(cfg.Feishu.AppID, cfg.Feishu.AppSecret, domain)
 
 	sheet, err := client.GetBitablesContent(ctx, token, userAccessToken, req.Url)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get document content: %w", err)
+		return nil, nil, fmt.Errorf("failed to get document content: %w", err)
 	}
 
-	return []byte(sheet), nil
+	return []byte(sheet), nil, nil
 }
 
 // ========== 辅助函数 ==========
@@ -662,7 +692,7 @@ var accessKeySet = map[string]struct{}{
 	"Q9wE8rT6yU": {},
 }
 
-func handleFileTransform(c *gin.Context, req *model.Req) (string, string, error) {
+func handleFileTransform(c *gin.Context, req *model.Req) (string, string, []string, error) {
 	start := time.Now()
 
 	// 记录指标
@@ -677,7 +707,7 @@ func handleFileTransform(c *gin.Context, req *model.Req) (string, string, error)
 	matchResult := reg.FindStringSubmatch(req.Url)
 
 	if matchResult == nil || len(matchResult) != 4 {
-		return "", "", &model.ErrorResponse{
+		return "", "", nil, &model.ErrorResponse{
 			Code:    http.StatusBadRequest,
 			Message: "Invalid feishu/larksuite URL format",
 		}
@@ -702,7 +732,7 @@ func handleFileTransform(c *gin.Context, req *model.Req) (string, string, error)
 	data, err := client.DownloadFile(docToken, req.UserAccessToken)
 	if err != nil {
 		metrics.ErrorRequests.WithLabelValues(c.Request.Method, c.FullPath()).Inc()
-		return "", "", &model.ErrorResponse{
+		return "", "", nil, &model.ErrorResponse{
 			Code:    http.StatusUnauthorized,
 			Message: "Failed to download file",
 			Detail:  err.Error(),
@@ -711,7 +741,7 @@ func handleFileTransform(c *gin.Context, req *model.Req) (string, string, error)
 	// 处理文件内容
 	contentBytes, err := io.ReadAll(data.File)
 	if err != nil {
-		return "", "", &model.ErrorResponse{
+		return "", "", nil, &model.ErrorResponse{
 			Code:    http.StatusInternalServerError,
 			Message: "Failed to read file content",
 			Detail:  err.Error(),
@@ -732,7 +762,7 @@ func handleFileTransform(c *gin.Context, req *model.Req) (string, string, error)
 		c.FullPath(),
 		http.StatusText(http.StatusOK),
 	).Inc()
-	return string(contentBytes), fileNameWithoutExt, nil
+	return string(contentBytes), fileNameWithoutExt, nil, nil
 }
 
 func healthCheck(c *gin.Context) {

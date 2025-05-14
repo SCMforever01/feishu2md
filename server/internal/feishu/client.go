@@ -69,15 +69,15 @@ func (c *Client) DownloadFile(fileToken, userAccessToken string) (*lark.Download
 }
 
 // GetDocumentContent 获取文档内容
-func (c *Client) GetDocumentContent(ctx context.Context, docToken, userAccessToken string) (string, error) { //获取真实文件数据
+func (c *Client) GetDocumentContent(ctx context.Context, docToken, userAccessToken string) (*model.DocContentResult, error) { //获取真实文件数据
 	// 1. 获取基础文档内容
-	docx, blocks, err := c.GetDocxContent(ctx, docToken, userAccessToken)
+	docx, blocks, tittle, err := c.GetDocxContent(ctx, docToken, userAccessToken)
 	if err != nil {
-		return "", fmt.Errorf("获取文档内容失败: %w", err)
+		return nil, fmt.Errorf("获取文档内容失败: %w", err)
 	}
 	// 2. 空文档检查
 	if len(blocks) == 0 {
-		return "", fmt.Errorf("文档内容为空")
+		return nil, fmt.Errorf("文档内容为空")
 	}
 
 	// 3. 构建块索引映射
@@ -111,7 +111,7 @@ func (c *Client) GetDocumentContent(ctx context.Context, docToken, userAccessTok
 		if isTableBlock(block) {
 			newBlocks, err := c.processTableBlock(ctx, block, userAccessToken, docToken)
 			if err != nil {
-				return "", err
+				return nil, err
 			}
 
 			// 插入新生成的块
@@ -124,18 +124,28 @@ func (c *Client) GetDocumentContent(ctx context.Context, docToken, userAccessTok
 	}
 
 	// 7. 转换为Markdown
-	return parseDocxContent(docx, blocks), nil
+	markdown, imgTokens := parseDocxContent(docx, blocks)
+
+	// 8. 获取文档标题（假设从某个地方提取标题）
+	docTitle := tittle // 这里可以根据文档结构获取标题，或是从其它源提取
+
+	// 返回文档内容和标题
+	return &model.DocContentResult{
+		Markdown:  markdown,
+		DocTitle:  docTitle,
+		ImgTokens: imgTokens,
+	}, nil
 }
 
-func parseDocxContent(docx *lark.DocxDocument, blocks []*lark.DocxBlock) string {
+func parseDocxContent(docx *lark.DocxDocument, blocks []*lark.DocxBlock) (string, []string) {
 	cfg := config.LoadConfig()
 	newConfig := core.NewConfig(cfg.Feishu.AppID, cfg.Feishu.AppSecret)
 	parser := core.NewParser(newConfig.Output)
-	return parser.ParseDocxContent(docx, blocks)
+	return parser.ParseDocxContent(docx, blocks), parser.ImgTokens
 }
 
 // GetDocxContent 获取普通文档内容
-func (c *Client) GetDocxContent(ctx context.Context, docToken, userAccessToken string) (*lark.DocxDocument, []*lark.DocxBlock, error) {
+func (c *Client) GetDocxContent(ctx context.Context, docToken, userAccessToken string) (*lark.DocxDocument, []*lark.DocxBlock, string, error) {
 	// 创建请求
 	req := &lark.GetDocxDocumentReq{
 		DocumentID: docToken,
@@ -151,7 +161,7 @@ func (c *Client) GetDocxContent(ctx context.Context, docToken, userAccessToken s
 	}
 
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 
 	docx := &lark.DocxDocument{
@@ -173,7 +183,7 @@ func (c *Client) GetDocxContent(ctx context.Context, docToken, userAccessToken s
 		if userAccessToken != "" {
 			resp2, _, err := c.client.Drive.GetDocxBlockListOfDocument(ctx, blockReq, lark.WithUserAccessToken(userAccessToken))
 			if err != nil {
-				return docx, nil, err
+				return docx, nil, "", err
 			}
 			blocks = append(blocks, resp2.Items...)
 			pageToken = &resp2.PageToken
@@ -183,7 +193,7 @@ func (c *Client) GetDocxContent(ctx context.Context, docToken, userAccessToken s
 		} else {
 			resp2, _, err := c.client.Drive.GetDocxBlockListOfDocument(ctx, blockReq)
 			if err != nil {
-				return docx, nil, err
+				return docx, nil, "", err
 			}
 			blocks = append(blocks, resp2.Items...)
 			pageToken = &resp2.PageToken
@@ -193,7 +203,7 @@ func (c *Client) GetDocxContent(ctx context.Context, docToken, userAccessToken s
 		}
 	}
 
-	return docx, blocks, nil
+	return docx, blocks, resp.Document.Title, nil
 }
 
 func (c *Client) DownloadImageRaw(ctx context.Context, imgToken, imgDir string, userAccessToken string) (string, []byte, error) {
@@ -716,9 +726,11 @@ func (c *Client) GetSheetsContent(ctx context.Context, token string, userAccessT
 		DocumentID: titleBlock.BlockID,
 		Title:      sheetTitle,
 	}
+	markdown, imgTokens := parseDocxContent(docx, blocks)
 	return &model.SheetContentResult{
-		Markdown:   parseDocxContent(docx, blocks),
+		Markdown:   markdown,
 		SheetTitle: sheetTitle,
+		ImgTokens:  imgTokens,
 	}, nil
 }
 
@@ -849,8 +861,8 @@ func (c *Client) GetBitablesContent(ctx context.Context, token string, userAcces
 		DocumentID: titleBlock.BlockID,
 		Title:      bitableName,
 	}
-
-	return parseDocxContent(docx, allBlocks), nil
+	markdown, _ := parseDocxContent(docx, allBlocks)
+	return markdown, nil
 }
 
 func (c *Client) GetBitableTableID(ctx context.Context, appToken string, userAccessToken string) (string, error) {

@@ -69,6 +69,8 @@ func InitRedisClient(cluster string) *RedisCache {
 	// 连接健康检查
 	if err := client.Ping(context.Background()).Err(); err != nil {
 		panic(fmt.Sprintf("Redis connection failed: %v", err))
+	} else {
+		log.Println("Connected to Redis successfully")
 	}
 
 	return &RedisCache{
@@ -107,7 +109,10 @@ func (c *RedisCache) TokenBucketRateLimit(ctx context.Context, key string, limit
         end
     `
 	now := time.Now().Unix()
+	log.Println("程序运行到 TokenBucketRateLimit 函数中")
 	result, err := c.client.Eval(ctx, luaScript, []string{key + ":tokens", key + ":timestamp"}, now, refillRate, limit).Result()
+	log.Println("程序运行到 TokenBucketRateLimit 函数后")
+	log.Printf("result:%v", result)
 	if err != nil {
 		return false, err
 	}
@@ -120,11 +125,14 @@ func (c *RedisCache) RetryDownloadRateLimit(ctx context.Context, imgToken string
 	totalWaitTime := time.Duration(0)
 
 	for retryCount < maxRetries {
+		log.Println("程序运行到 RetryDownloadRateLimit 函数中")
+
 		allowed, err := c.TokenBucketRateLimit(ctx, "global_download_rate", 5, 5)
 		if err != nil {
 			log.Printf("Error checking rate limit for image %s: %v", imgToken, err)
 			return false
 		}
+		log.Println("程序运行到 RetryDownloadRateLimit 函数后")
 		if allowed {
 			return true // 限流成功，返回 true
 		}

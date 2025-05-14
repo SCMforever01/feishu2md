@@ -73,7 +73,7 @@
         <div v-else-if="docData">
           <div class="header-section">
             <h2 class="doc-title">{{ docData.sheetTitle }}</h2>
-            <export-toolbar :content="safeContent" :title="docData.sheetTitle" />
+            <export-toolbar :content="safeContent" :title="docData.Title" />
           </div>
           <div class="meta-info">
             <el-tag type="info" effect="plain" v-if="docData.author">
@@ -178,7 +178,9 @@ export default {
 
     safeContent() {
       if (!this.docData) return ''
-      return DOMPurify.sanitize(this.docData.markdown || '', {
+      const rawHtml = marked(this.docData.markdown || '')
+      const purifier = DOMPurify.sanitize
+      return purifier(rawHtml, {
         ADD_TAGS: ['table', 'thead', 'tbody', 'tr', 'td', 'th'],
         ADD_ATTR: ['colspan', 'rowspan', 'align', 'style']
       })

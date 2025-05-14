@@ -19,19 +19,20 @@ func NewTransformService(db *sql.DB) *TransformService {
 }
 
 // CreateTransform 创建一条新的 Transform 记录
-func (s *TransformService) CreateTransform(userID int, url string, result string) (*model.Transform, error) {
+func (s *TransformService) CreateTransform(userID int, url string, result string, tittle string) (*model.Transform, error) {
 	// 创建新记录
 	transform := &model.Transform{
 		UserID:    userID,
 		Url:       url,
 		Result:    result, // 使用 Result 字段
+		Tittle:    tittle,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
 
 	// 插入数据
-	query := `INSERT INTO transform (user_id, url, result, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`
-	resultSet, err := s.DB.Exec(query, transform.UserID, transform.Url, transform.Result, transform.CreatedAt, transform.UpdatedAt)
+	query := `INSERT INTO transform (user_id, url, result, tittle,created_at, updated_at) VALUES (?, ?, ?, ?, ?)`
+	resultSet, err := s.DB.Exec(query, transform.UserID, transform.Url, transform.Result, transform.Tittle, transform.CreatedAt, transform.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("插入 Transform 记录失败: %v", err)
 	}
@@ -52,11 +53,11 @@ func (s *TransformService) GetTransform(id int) (*model.Transform, error) {
 	var transform model.Transform
 
 	// 根据 ID 查找记录
-	query := `SELECT id, user_id, url, result, created_at, updated_at FROM transform WHERE id = ?`
+	query := `SELECT id, user_id, url, result, tittle,created_at, updated_at FROM transform WHERE id = ?`
 	row := s.DB.QueryRow(query, id)
 
 	// 填充数据
-	err := row.Scan(&transform.ID, &transform.UserID, &transform.Url, &transform.Result, &transform.CreatedAt, &transform.UpdatedAt)
+	err := row.Scan(&transform.ID, &transform.UserID, &transform.Url, &transform.Result, &transform.Tittle, &transform.CreatedAt, &transform.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, errors.New("Transform 记录未找到")
@@ -68,15 +69,15 @@ func (s *TransformService) GetTransform(id int) (*model.Transform, error) {
 }
 
 // UpdateTransform 更新一条 Transform 记录
-func (s *TransformService) UpdateTransform(id int, url, result string) (*model.Transform, error) {
+func (s *TransformService) UpdateTransform(id int, url, result string, tittle string) (*model.Transform, error) {
 	var transform model.Transform
 
 	// 查找记录
-	query := `SELECT id, user_id, url, result, created_at, updated_at FROM transform WHERE id = ?`
+	query := `SELECT id, user_id, url, result, tittle,created_at, updated_at FROM transform WHERE id = ?`
 	row := s.DB.QueryRow(query, id)
 
 	// 填充数据
-	err := row.Scan(&transform.ID, &transform.UserID, &transform.Url, &transform.Result, &transform.CreatedAt, &transform.UpdatedAt)
+	err := row.Scan(&transform.ID, &transform.UserID, &transform.Url, &transform.Result, &transform.Tittle, &transform.CreatedAt, &transform.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, errors.New("Transform 记录未找到")
@@ -87,11 +88,12 @@ func (s *TransformService) UpdateTransform(id int, url, result string) (*model.T
 	// 更新记录
 	transform.Url = url
 	transform.Result = result
+	transform.Tittle = tittle
 	transform.UpdatedAt = time.Now()
 
 	// 执行更新
-	updateQuery := `UPDATE transform SET url = ?, result = ?, updated_at = ? WHERE id = ?`
-	_, err = s.DB.Exec(updateQuery, transform.Url, transform.Result, transform.UpdatedAt, transform.ID)
+	updateQuery := `UPDATE transform SET url = ?, result = ?,tittle = ?, updated_at = ? WHERE id = ?`
+	_, err = s.DB.Exec(updateQuery, transform.Url, transform.Result, transform.Tittle, transform.UpdatedAt, transform.ID)
 	if err != nil {
 		return nil, fmt.Errorf("更新 Transform 记录失败: %v", err)
 	}
@@ -129,7 +131,7 @@ func (s *TransformService) GetHistory(userID int) ([]model.Transform, error) {
 	var transforms []model.Transform
 
 	// 根据 userID 查找历史记录
-	query := `SELECT id, user_id, url, result, created_at, updated_at FROM transform WHERE user_id = ? ORDER BY created_at DESC`
+	query := `SELECT id, user_id, url, result, tittle,created_at, updated_at FROM transform WHERE user_id = ? ORDER BY created_at DESC`
 	rows, err := s.DB.Query(query, userID)
 	if err != nil {
 		return nil, fmt.Errorf("查询 Transform 记录失败: %v", err)
@@ -139,7 +141,7 @@ func (s *TransformService) GetHistory(userID int) ([]model.Transform, error) {
 	// 遍历查询结果
 	for rows.Next() {
 		var transform model.Transform
-		if err := rows.Scan(&transform.ID, &transform.UserID, &transform.Url, &transform.Result, &transform.CreatedAt, &transform.UpdatedAt); err != nil {
+		if err := rows.Scan(&transform.ID, &transform.UserID, &transform.Url, &transform.Result, &transform.Tittle, &transform.CreatedAt, &transform.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("扫描 Transform 记录失败: %v", err)
 		}
 		transforms = append(transforms, transform)

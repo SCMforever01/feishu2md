@@ -12,6 +12,7 @@ import (
 	"feishu2md/server/pkg/utils"
 	"fmt"
 	"go.uber.org/zap"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -84,12 +85,14 @@ func (p *Processor) processSingleImage(ctx context.Context, token string, maxRet
 	if url, _ := p.cache.GetURL(ctx, token); url != "" {
 		return url
 	}
-
+	log.Println("程序运行到 processSingleImage 函数中")
 	//启用全局令牌桶进行限流，保证全局请求不超过5QPS
 	if !p.cache.RetryDownloadRateLimit(ctx, token, maxRetries, maxWaitTime) {
 		logger.L.Warn("下载被限流", zap.String("token", token))
 		return "" // 超过重试次数或等待超时，跳过该图片
 	}
+	log.Println("程序运行到 processSingleImage 函数后")
+
 	// 3. 下载并上传
 	downloadImageRaw := func() (string, []byte, error) {
 		return p.client.DownloadImageRaw(ctx, token, fmt.Sprintf("%s/%s", "images", req.Collection), req.UserAccessToken)

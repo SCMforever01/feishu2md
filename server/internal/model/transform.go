@@ -28,6 +28,13 @@ func (e *ErrorResponse) Error() string {
 }
 
 type SheetContentResult struct {
-	Markdown   string `json:"markdown"`
-	SheetTitle string `json:"sheetTitle"`
+	Markdown   string   `json:"markdown"`
+	SheetTitle string   `json:"sheetTitle"`
+	ImgTokens  []string `json:"imgTokens"`
+}
+
+type DocContentResult struct {
+	Markdown  string   `json:"markdown"`
+	DocTitle  string   `json:"docTitle"`
+	ImgTokens []string `json:"imgTokens"`
 }

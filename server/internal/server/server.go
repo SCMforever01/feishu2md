@@ -5,9 +5,11 @@ import (
 	"feishu2md/server/internal/handler"
 	"feishu2md/server/internal/logger"
 	"feishu2md/server/internal/middlewares"
+	"feishu2md/server/internal/repository/storage"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+	"log"
 )
 
 type Server struct {
@@ -40,8 +42,13 @@ func StartServer(cfg *config.Config) {
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "token"}, // 允许的请求头
 		AllowCredentials: true,                                                         // 允许携带凭证
 	}))
+	// 初始化本地存储服务
+	newStorage, err := storage.NewLocalStorage(cfg.Storage.LocalDir)
+	if err != nil {
+		log.Fatalf("Failed to initialize storage: %v", err)
+	}
 	// 注册路由
-	handler.RegisterRoutes(router)
+	handler.RegisterRoutes(router, newStorage)
 	protected := router.Group("/v1")
 	protected.Use(middlewares.JWTMiddleware()) // 应用 JWT 验证中间件
 
