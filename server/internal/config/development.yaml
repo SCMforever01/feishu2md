@@ -1,0 +1,28 @@
+port: 8080
+
+# 飞书配置
+feishu:
+  app_id: "cli_a72e872fe4fbd00e"
+  app_secret: "tPkpAtBuptRZLQJ7Gnv70w7SU5x4TIco"
+
+# 数据库配置
+database:
+  type: "mysql"
+  host: "localhost"
+  port: 3306
+  username: "root"
+  password: "password"
+  dbname: "my_db"
+  sslmode: "disable"
+
+# 日志配置（可选，如果沿用之前的日志配置）
+log:
+  path: "logs/app.log"
+  level: "debug"
+  format: "console"
+  max_size: 10
+  max_backups: 5
+  max_age: 30
+  compress: true
+  console_enable: true
+

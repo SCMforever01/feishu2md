@@ -1,0 +1,8 @@
+/* 修复element-ui组件渲染问题 */
+.el-container {
+    min-height: 100vh;
+}
+
+.el-main {
+    padding: 20px 0;
+}
